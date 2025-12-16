@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package net;
+
+// Go package import path for generated code
+option go_package = "github.com/linchenxuan/strix/net";
+
+// EAsuraRetCode defines standardized error codes that need to be understood by both servers and clients
+// Values 0-10000 are reserved for framework-level errors that clients must handle appropriately
+enum EAsuraRetCode {
+    // AsuraRetCodeOK indicates successful operation completion
+    AsuraRetCodeOK = 0;
+    
+    // RPCDeadlineExceeded indicates the request exceeded its deadline
+    // This is a client-triggered request that should not be automatically retried
+    // Clients must explicitly retry if needed
+    RPCDeadlineExceeded = 408;
+    
+    // AsuraMax defines the upper bound for framework-level error codes
+    // All values less than or equal to this are reserved for Asura framework use
+    AsuraMax = 9999;
+}
+
+// P2PRoute represents point-to-point routing for direct entity-to-entity communication
+// Used for targeted messaging between specific game entities (players, NPCs, rooms, etc.)
+message P2PRoute {
+    // DstEntityID is the unique identifier of the target entity
+    // This should be the globally unique entity ID within the cluster
+    uint32 DstEntityID = 1;
+}
+
+// RandRoute represents random routing strategy for load distribution
+// Routes messages to a random instance within a functional group
+message RandRoute {
+    // FuncID identifies the functional group for routing
+    // Maps to specific service types (login, matchmaking, chat, etc.)
+    uint32 FuncID = 1;
+    
+    // UseConstantRoute enables deterministic routing for testing/debugging
+    // When true, uses ConstantKey for consistent routing decisions
+    bool UseConstantRoute = 2;
+    
+    // ConstantKey provides deterministic routing key when UseConstantRoute is true
+    // Useful for testing scenarios requiring predictable routing
+    uint64 ConstantKey = 3;
+}
+
+// BroadCastRoute represents broadcast routing to all instances within a functional group
+// Used for global notifications, announcements, or state synchronization
+message BroadCastRoute {
+    // FuncID identifies the functional group to broadcast to
+    uint32 FuncID = 1;
+}
+
+// MultiCastRoute represents multicast routing to specific entity IDs
+// Allows selective messaging to multiple predefined recipients
+message MultiCastRoute {
+    // EntityIDs is the list of target entity identifiers
+    // Each ID must be a valid entity identifier within the cluster
+    repeated int32 EntityIDs = 1;
+}
+
+// RouteHead encapsulates complete routing information for message delivery
+// Provides the routing layer with all necessary context for message dispatch
+message RouteHead {
+    // SrcEntityID identifies the originating entity
+    // Used for response routing and audit trails
+    uint32 SrcEntityID = 1;
+    
+    // MsgID is the unique message type identifier
+    // Maps to specific protobuf message types in the application layer
+    string MsgID = 2;
+    
+    // RouteType specifies the routing strategy for this message
+    // Exactly one of these routing types must be specified
+    oneof RouteType {
+        // P2P routing for direct entity communication
+        P2PRoute P2P = 3;
+        
+        // Rand routing for load-balanced distribution
+        RandRoute Rand = 4;
+        
+        // BroadCast routing for global notifications
+        BroadCastRoute BroadCast = 5;
+        
+        // MultiCastRoute routing for selective multicasting
+        MultiCastRoute MultiCast = 6;
+    }
+}
+
+// PackageHead contains metadata for individual message packages
+// Provides envelope information for message processing and routing
+message PackageHead {
+    // MsgID identifies the message type for handler dispatch
+    string MsgID = 1;
+    
+    // RetCode indicates the operation result status
+    // Should be one of the EAsuraRetCode values
+    int32 RetCode = 2;
+    
+    // SvrPkgSeq is the server-side package sequence number
+    // Starts from 1 for each server instance
+    fixed32 SvrPkgSeq = 3;
+    
+    // CliPkgSeq is the client-side package sequence number
+    // Starts from 1 for each client connection
+    fixed32 CliPkgSeq = 4;
+    
+    // SrcActorID identifies the originating actor/entity
+    // Can be player UID, room ID, or any other entity identifier
+    uint64 SrcActorID = 5;
+    
+    // DstActorID identifies the target actor/entity
+    // Can be player UID, room ID, or any other entity identifier
+    uint64 DstActorID = 6;
+    
+    // SrcCliVersion indicates the client version of the request originator
+    int64 SrcCliVersion = 7;
+}
+
+// PkgRouteHeader combines routing and package metadata
+// Provides complete message context for processing
+message PkgRouteHeader {
+    // RouteHdr contains routing information for message dispatch
+    RouteHead RouteHdr = 1;
+    
+    // PkgHdr contains package-level metadata
+    PackageHead PkgHdr = 2;
+}
