@@ -24,7 +24,7 @@ var (
 // Manager is responsible for managing all plugins in the framework.
 type Manager struct {
 	factories map[Type]map[string]Factory
-	plugins   map[Type]map[string]any
+	plugins   map[Type]map[string]Plugin
 	lock      sync.RWMutex
 }
 
@@ -32,7 +32,7 @@ type Manager struct {
 func NewManager() *Manager {
 	return &Manager{
 		factories: make(map[Type]map[string]Factory),
-		plugins:   make(map[Type]map[string]any),
+		plugins:   make(map[Type]map[string]Plugin),
 	}
 }
 
@@ -103,7 +103,7 @@ func (m *Manager) SetupPlugins(pluginConf map[string]any) error {
 			}
 
 			if _, ok := m.plugins[pluginType]; !ok {
-				m.plugins[pluginType] = make(map[string]any)
+				m.plugins[pluginType] = make(map[string]Plugin)
 			}
 
 			// Register instance

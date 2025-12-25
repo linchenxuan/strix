@@ -3,6 +3,13 @@ package plugin
 // Type is the type of plugin supported by the system.
 type Type string
 
+const (
+	// Metrics .
+	Metrics = "metrics"
+	// Tracer .
+	Tracer = "tracer"
+)
+
 // Factory is the interface for plugin factories.
 type Factory interface {
 	// Type returns the plugin type.
@@ -13,5 +20,11 @@ type Factory interface {
 	// This struct will be populated by the manager using mapstructure.
 	ConfigType() any
 	// Setup initializes a plugin instance based on the configuration.
-	Setup(any) (any, error)
+	Setup(any) (Plugin, error)
+
+	Destroy(Plugin)
+}
+
+type Plugin interface {
+	FactoryName() string
 }

@@ -17,6 +17,9 @@ type MockConfig struct {
 type MockFactory struct {
 	PType Type
 	PName string
+	// Test helpers
+	SetupCount   int
+	DestroyCount int
 }
 
 func (m *MockFactory) Type() Type   { return m.PType }
@@ -24,13 +27,23 @@ func (m *MockFactory) Name() string { return m.PName }
 func (m *MockFactory) ConfigType() any {
 	return &MockConfig{} // Return an empty mock config struct
 }
-func (m *MockFactory) Setup(config any) (any, error) {
+func (m *MockFactory) Setup(config any) (Plugin, error) {
+	m.SetupCount++
 	// In a real scenario, you'd assert config to *MockConfig and use its values
-	return &MockPlugin{}, nil
+	return &MockPlugin{FName: m.PName}, nil
+}
+func (m *MockFactory) Destroy(p Plugin) {
+	m.DestroyCount++
 }
 
 // MockPlugin is a mock plugin instance for testing.
-type MockPlugin struct{}
+type MockPlugin struct {
+	FName string
+}
+
+func (mp *MockPlugin) FactoryName() string {
+	return mp.FName
+}
 
 const (
 	Log Type = "log"
@@ -174,10 +187,7 @@ func TestManager(t *testing.T) {
 			}
 			err := subManager.SetupPlugins(pluginConf)
 			assert.Error(t, err)
-					assert.ErrorIs(t, err, ErrInvalidConfigFormat)
-					})
-				})
-			}
-			
-			
-			
+			assert.ErrorIs(t, err, ErrInvalidConfigFormat)
+		})
+	})
+}

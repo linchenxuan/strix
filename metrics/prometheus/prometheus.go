@@ -1,7 +1,7 @@
 // Package reporter provides Prometheus metrics reporting functionality.
 // This package implements a reporter that converts application metrics to Prometheus format
 // and exposes them via HTTP endpoint or push gateway.
-package metrics
+package prometheus
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/linchenxuan/strix/log"
+	"github.com/linchenxuan/strix/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -46,7 +47,7 @@ type metricOpt struct {
 }
 
 // newMetricOpt creates metric options from a metric record and external labels.
-func newMetricOpt(rc *Record, extLabels map[string]string) *metricOpt {
+func newMetricOpt(rc *metrics.Record, extLabels map[string]string) *metricOpt {
 	opts := &metricOpt{
 		subsystem:   strings.ReplaceAll(rc.Metrics().Group(), ".", "_"),
 		name:        strings.ReplaceAll(rc.Metrics().Name(), ".", "_"),
@@ -71,7 +72,7 @@ type promGauge struct {
 }
 
 // newPromGauga creates a new Prometheus gauge wrapper from a metric record.
-func newPromGauga(rc *Record, extLabels map[string]string) *metricWrapper {
+func newPromGauga(rc *metrics.Record, extLabels map[string]string) *metricWrapper {
 	o := newMetricOpt(rc, extLabels)
 	opts := prometheus.GaugeOpts{
 		Subsystem:   o.subsystem,
@@ -93,17 +94,17 @@ func newPromGauga(rc *Record, extLabels map[string]string) *metricWrapper {
 }
 
 // merge updates the gauge value based on the metric policy.
-func (p *promGauge) merge(rc *Record) error {
+func (p *promGauge) merge(rc *metrics.Record) error {
 	switch rc.Metrics().Policy() {
-	case Policy_Set:
+	case metrics.Policy_Set:
 		p.Set(float64(rc.Value()))
-	case Policy_Sum:
+	case metrics.Policy_Sum:
 		p.Add(float64(rc.Value()))
-	case Policy_Max:
+	case metrics.Policy_Max:
 		p.Set(float64(rc.Value()))
-	case Policy_Min:
+	case metrics.Policy_Min:
 		p.Set(float64(rc.Value()))
-	case Policy_Avg, Policy_Stopwatch:
+	case metrics.Policy_Avg, metrics.Policy_Stopwatch:
 		v, c := rc.RawData()
 		p.value += float64(v)
 		p.cnt += c
@@ -118,7 +119,7 @@ func (p *promGauge) merge(rc *Record) error {
 }
 
 // newPromCounter creates a new Prometheus counter from a metric record.
-func newPromCounter(rc *Record, extLabels map[string]string) *metricWrapper {
+func newPromCounter(rc *metrics.Record, extLabels map[string]string) *metricWrapper {
 	o := newMetricOpt(rc, extLabels)
 	opts := prometheus.CounterOpts{
 		Subsystem:   o.subsystem,
@@ -142,7 +143,7 @@ type metricWrapper struct {
 }
 
 // merge updates the wrapped metric with new record data.
-func (m *metricWrapper) merge(rc *Record) {
+func (m *metricWrapper) merge(rc *metrics.Record) {
 	convertSuc := false
 	switch m.mt {
 	case _metricTypeGauge:
@@ -193,7 +194,7 @@ type PrometheusReporter struct {
 	cfg               *PrometheusReporterConfig
 	promSvr           *http.Server
 	pusher            *push.Pusher
-	metricsChan       chan Record
+	metricsChan       chan metrics.Record
 	metrics           map[string]*metricWrapper
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -209,19 +210,22 @@ func NewPrometheusReporter() *PrometheusReporter {
 		cfg: &PrometheusReporterConfig{
 			HealthCheckPath: "/health", // 默认健康检查路径
 		},
-		metricsChan:  make(chan Record, _metricsChanSize),
+		metricsChan:  make(chan metrics.Record, _metricsChanSize),
 		metrics:      map[string]*metricWrapper{},
 		ctx:          ctx,
 		cancel:       cancel,
 		healthStatus: 0, // 初始状态为健康
 	}
 
-	p.start()
 	return p
 }
 
+func (x *PrometheusReporter) FactoryName() string {
+	return "prometheus"
+}
+
 // Report 插件上报.
-func (x *PrometheusReporter) Report(r Record) {
+func (x *PrometheusReporter) Report(r metrics.Record) {
 	select {
 	case x.metricsChan <- r:
 	default:
@@ -245,7 +249,7 @@ func (x *PrometheusReporter) start() error {
 	return nil
 }
 
-func (x *PrometheusReporter) Stop() {
+func (x *PrometheusReporter) stop() {
 	if x.cancel != nil {
 		x.cancel()
 		x.cancel = nil
@@ -437,17 +441,17 @@ func (x *PrometheusReporter) performHealthCheck() {
 // based on the metric type (Counter, StopWatch, or Gauge).
 //
 //nolint:gocritic,staticcheck
-func (x *PrometheusReporter) merge(rc *Record) {
+func (x *PrometheusReporter) merge(rc *metrics.Record) {
 	key := x.getFullName(rc)
 	if m, exist := x.metrics[key]; exist {
 		m.merge(rc)
 		return
 	}
 	switch m := rc.Metrics().(type) {
-	case Counter:
+	case metrics.Counter:
 		c := newPromCounter(rc, x.cfg.ExtLabels)
 		x.metrics[key] = c
-	case StopWatch, Gauge:
+	case metrics.StopWatch, metrics.Gauge:
 		g := newPromGauga(rc, x.cfg.ExtLabels)
 		x.metrics[key] = g
 	default:
@@ -458,7 +462,7 @@ func (x *PrometheusReporter) merge(rc *Record) {
 // getFullName generates a unique key for a metrics record.
 // It combines the metric group, name, external labels, and dimensions into a single string
 // to uniquely identify the metric for storage and retrieval.
-func (x *PrometheusReporter) getFullName(rc *Record) string {
+func (x *PrometheusReporter) getFullName(rc *metrics.Record) string {
 	var sb strings.Builder
 	sb.Grow(256)
 	sb.WriteString(rc.Metrics().Group())

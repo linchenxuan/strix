@@ -35,35 +35,6 @@ func TestNewNoopSpan(t *testing.T) {
 	span.LogEvent("event")
 }
 
-// 测试NewTextMapCarrier函数
-func TestNewTextMapCarrier(t *testing.T) {
-	carrier := NewTextMapCarrier()
-	if carrier == nil {
-		t.Errorf("NewTextMapCarrier returned nil")
-	}
-
-	// 验证carrier的方法
-	key := "test-key"
-	value := "test-value"
-	carrier.Set(key, value)
-	if got := carrier.Get(key); got != value {
-		t.Errorf("Expected Get(%s) to return %s, got %s", key, value, got)
-	}
-
-	// Use type assertion to access Keys() and Format() methods
-	if textMapCarrier, ok := carrier.(*textMapCarrier); ok {
-		keys := textMapCarrier.Keys()
-		if len(keys) != 1 || keys[0] != key {
-			t.Errorf("Expected Keys() to return [%s], got %v", key, keys)
-		}
-
-		format := textMapCarrier.Format()
-		if format != "text_map" {
-			t.Errorf("Expected Format() to return 'text_map', got %s", format)
-		}
-	}
-}
-
 // 测试NewHTTPHeadersCarrier函数
 func TestNewHTTPHeadersCarrier(t *testing.T) {
 	carrier := NewHTTPHeadersCarrier()

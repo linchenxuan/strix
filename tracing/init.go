@@ -16,46 +16,6 @@ var (
 	globalPropagator = make(map[string]Propagator)
 )
 
-// Initialize the tracing system with configuration from config manager
-// This function sets up the global tracer instance and registers necessary components
-// Returns:
-//   - Tracer: The initialized tracer instance
-//   - error: Any error encountered during initialization
-func InitTracing(cfg *TracerConfig) (Tracer, error) {
-	// Create tracer using builder pattern for flexible configuration
-	tracer, err := buildTracer(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set global tracer with proper synchronization
-	setGlobalTracer(tracer)
-
-	// Register default propagators for cross-process context propagation
-	registerDefaultPropagators()
-
-	return tracer, nil
-}
-
-// Build tracer using builder pattern for flexible and validated configuration
-// The builder pattern ensures that all configuration is validated before tracer creation
-// Parameters:
-//   - cfg: Tracer configuration containing sampling rate, reporter settings, etc.
-//
-// Returns:
-//   - Tracer: Fully configured tracer instance
-//   - error: Validation or creation errors
-//
-// Builder pattern benefits:
-//   - Encapsulates complex creation logic
-//   - Provides validation before object creation
-//   - Supports flexible configuration combinations
-func buildTracer(cfg *TracerConfig) (Tracer, error) {
-	// Use builder pattern to create tracer with validation and flexible configuration
-	builder := NewTracerBuilder(*cfg)
-	return builder.Build()
-}
-
 // Register default propagators for different context propagation formats
 // Propagators handle encoding/decoding of span context across process boundaries
 // Supported formats:

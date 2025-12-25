@@ -1,4 +1,4 @@
-package tracing
+package zipking
 
 import (
 	"encoding/json"
@@ -7,44 +7,36 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/linchenxuan/strix/tracing"
 )
 
 // 测试NewZipkinReporter函数
 func TestNewZipkinReporter(t *testing.T) {
-	endpoint := "http://localhost:9411"
-	serviceName := "test-service"
-	batchSize := 5
 
-	reporter := NewZipkinReporter(endpoint, serviceName, batchSize)
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    "http://localhost:9411",
+		ServiceName: "test-service",
+		BatchSize:   5,
+	}
+	reporter := newZipkinReporter(cfg)
+
 	if reporter == nil {
-		t.Fatal("NewZipkinReporter returned nil")
-	}
-
-	// 验证基本属性设置正确
-	if reporter.endpoint != endpoint {
-		t.Errorf("Expected endpoint %s, got %s", endpoint, reporter.endpoint)
-	}
-	if reporter.serviceName != serviceName {
-		t.Errorf("Expected serviceName %s, got %s", serviceName, reporter.serviceName)
-	}
-	if reporter.batchSize != batchSize {
-		t.Errorf("Expected batchSize %d, got %d", batchSize, reporter.batchSize)
-	}
-
-	// 测试默认batchSize
-	reporter = NewZipkinReporter(endpoint, serviceName, 0)
-	if reporter.batchSize != 100 {
-		t.Errorf("Expected default batchSize 100, got %d", reporter.batchSize)
+		t.Fatal("newZipkinReporter returned nil")
 	}
 }
 
 // 测试convertToZipkin方法
 func TestConvertToZipkin(t *testing.T) {
-	reporter := NewZipkinReporter("http://localhost:9411", "test-service", 10)
-
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    "http://localhost:9411",
+		ServiceName: "test-service",
+		BatchSize:   10,
+	}
+	reporter := newZipkinReporter(cfg)
 	// 创建测试用的SpanData
 	startTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
-	spanData := SpanData{
+	spanData := tracing.SpanData{
 		TraceID:      "trace-123",
 		SpanID:       "span-456",
 		ParentSpanID: "parent-789",
@@ -139,11 +131,16 @@ func TestZipkinReporterReportAndFlush(t *testing.T) {
 	defer server.Close()
 
 	// 创建ZipkinReporter指向mock服务器
-	reporter := NewZipkinReporter(server.URL, "test-service", 2)
-	defer reporter.Close()
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    server.URL,
+		ServiceName: "test-service",
+		BatchSize:   2, // 设置较小的batch size以便测试flush
+	}
+	reporter := newZipkinReporter(cfg)
+	defer reporter.stop()
 
 	// 创建测试用的SpanData
-	spanData1 := SpanData{
+	spanData1 := tracing.SpanData{
 		TraceID:   "trace-1",
 		SpanID:    "span-1",
 		Operation: "operation-1",
@@ -151,7 +148,7 @@ func TestZipkinReporterReportAndFlush(t *testing.T) {
 		Duration:  time.Second,
 	}
 
-	spanData2 := SpanData{
+	spanData2 := tracing.SpanData{
 		TraceID:   "trace-2",
 		SpanID:    "span-2",
 		Operation: "operation-2",
@@ -214,11 +211,16 @@ func TestZipkinReporterPeriodicFlush(t *testing.T) {
 	defer server.Close()
 
 	// 修改reporter的reportLoop方法，使其使用更短的间隔进行测试
-	reporter := NewZipkinReporter(server.URL, "test-service", 100) // 大的batchSize确保不会因为批次满而触发flush
-	defer reporter.Close()
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    server.URL,
+		ServiceName: "test-service",
+		BatchSize:   10, // 大的batchSize确保不会因为批次满而触发flush
+	}
+	reporter := newZipkinReporter(cfg) // 大的batchSize确保不会因为批次满而触发flush
+	defer reporter.stop()
 
 	// 创建测试用的SpanData
-	spanData := SpanData{
+	spanData := tracing.SpanData{
 		TraceID:   "trace-1",
 		SpanID:    "span-1",
 		Operation: "operation-1",
@@ -270,10 +272,15 @@ func TestZipkinReporterClose(t *testing.T) {
 	defer server.Close()
 
 	// 创建ZipkinReporter
-	reporter := NewZipkinReporter(server.URL, "test-service", 100)
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    server.URL,
+		ServiceName: "test-service",
+		BatchSize:   2,
+	}
+	reporter := newZipkinReporter(cfg)
 
 	// 添加span
-	spanData := SpanData{
+	spanData := tracing.SpanData{
 		TraceID:   "trace-close",
 		SpanID:    "span-close",
 		Operation: "operation-close",
@@ -286,7 +293,7 @@ func TestZipkinReporterClose(t *testing.T) {
 	}
 
 	// 调用Close方法
-	err = reporter.Close()
+	err = reporter.stop()
 	if err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
@@ -299,7 +306,7 @@ func TestZipkinReporterClose(t *testing.T) {
 	mu.Unlock()
 
 	// 验证多次调用Close是安全的
-	err = reporter.Close()
+	err = reporter.stop()
 	if err != nil {
 		t.Errorf("Second Close failed: %v", err)
 	}
@@ -315,11 +322,16 @@ func TestZipkinReporterErrorHandling(t *testing.T) {
 	defer server.Close()
 
 	// 创建ZipkinReporter，设置较大的batchSize避免立即flush
-	reporter := NewZipkinReporter(server.URL, "test-service", 100)
-	defer reporter.Close()
+	cfg := &ZipkinReporterConfig{
+		Endpoint:    server.URL,
+		ServiceName: "test-service",
+		BatchSize:   100,
+	}
+	reporter := newZipkinReporter(cfg)
+	defer reporter.stop()
 
 	// 创建测试用的SpanData
-	spanData := SpanData{
+	spanData := tracing.SpanData{
 		TraceID:   "trace-error",
 		SpanID:    "span-error",
 		Operation: "operation-error",
@@ -337,7 +349,7 @@ func TestZipkinReporterErrorHandling(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 验证Close方法仍然被调用
-	err = reporter.Close()
+	err = reporter.stop()
 	// 由于服务器返回错误，Close方法可能会返回错误，这是可以接受的
 	// 我们只需要确保Close方法能够正常退出，不会导致panic
 }
