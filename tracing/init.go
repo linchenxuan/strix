@@ -40,7 +40,7 @@ func registerDefaultPropagators() {
 //
 // Resource management: Properly closes the old tracer to release resources
 // Thread safety: Uses mutex to prevent race conditions during updates
-func setGlobalTracer(tracer Tracer) {
+func SetGlobalTracer(tracer Tracer) {
 	globalTracerMu.Lock()
 	defer globalTracerMu.Unlock()
 
