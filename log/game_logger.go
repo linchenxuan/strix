@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-
 )
 
 // GameLogger provides a thread-safe logging interface with configurable appenders and formatting.
@@ -37,16 +35,16 @@ import (
 // logger.Info().Str("module", "server").Int("connections", 42).Msg("Server started successfully")
 // ```
 type GameLogger struct {
-	appenders         []LogAppender        // Collection of appenders responsible for log output
-	minLevel          Level                // Minimum log level that will be processed
-	callerSkip        int                  // Number of stack frames to skip when capturing caller information
-	eventPool         *sync.Pool           // Object pool for LogEvent instances to minimize GC
-	levelChange       *levelChange         // Configuration for per-file/per-line log level overrides
-	callerCache       sync.Map             // Cache for caller information to avoid redundant calculations
-	enabledCallerInfo bool                 // Flag indicating whether caller information should be captured
+	appenders         []LogAppender // Collection of appenders responsible for log output
+	minLevel          Level         // Minimum log level that will be processed
+	callerSkip        int           // Number of stack frames to skip when capturing caller information
+	eventPool         *sync.Pool    // Object pool for LogEvent instances to minimize GC
+	levelChange       *levelChange  // Configuration for per-file/per-line log level overrides
+	callerCache       sync.Map      // Cache for caller information to avoid redundant calculations
+	enabledCallerInfo bool          // Flag indicating whether caller information should be captured
 
-	configMutex       sync.RWMutex         // Mutex for thread-safe configuration updates
-	currentConfig     *LogCfg              // Current configuration for fast access
+	configMutex   sync.RWMutex // Mutex for thread-safe configuration updates
+	currentConfig *LogCfg      // Current configuration for fast access
 }
 
 // NewLogger creates a new GameLogger instance with the provided configuration.
@@ -92,8 +90,6 @@ func NewLogger(cfg *LogCfg) *GameLogger {
 
 	return logger
 }
-
-
 
 // GetCurrentConfig returns the current logger configuration.
 // This method provides thread-safe access to the current configuration

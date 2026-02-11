@@ -6,8 +6,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-
 )
 
 const (
@@ -56,8 +54,6 @@ func NewFileAppender(cfg *LogCfg, l Logger) *FileAppender {
 	}
 	return a
 }
-
-
 
 // GetCurrentConfig returns the current file appender configuration.
 // This method provides thread-safe access to the current configuration

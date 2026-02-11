@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -24,7 +25,9 @@ require (
 
 require (
 	github.com/prometheus/client_golang v1.23.2
+	go.uber.org/ratelimit v0.3.1
 	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/time v0.14.0
 )
 
 replace github.com/lcx/asura => ../asura

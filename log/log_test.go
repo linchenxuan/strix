@@ -20,13 +20,13 @@ func TestFileLogging(t *testing.T) {
 
 	// 2. Configure and initialize the logger
 	cfg := &LogCfg{
-		LogPath:         logPath,
-		LogLevel:        DebugLevel,
-		FileSplitMB:     10,
-		FileSplitHour:   0, // No time-based splitting during test
-		IsAsync:         false, // Use synchronous mode for predictable testing
-		FileAppender:    true,
-		ConsoleAppender: false, // Disable console to not pollute test output
+		LogPath:           logPath,
+		LogLevel:          DebugLevel,
+		FileSplitMB:       10,
+		FileSplitHour:     0,     // No time-based splitting during test
+		IsAsync:           false, // Use synchronous mode for predictable testing
+		FileAppender:      true,
+		ConsoleAppender:   false, // Disable console to not pollute test output
 		EnabledCallerInfo: true,
 	}
 	err = Initialize(cfg)

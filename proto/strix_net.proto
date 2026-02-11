@@ -1,129 +1,163 @@
 syntax = "proto3";
 
-package net;
+package network;
 
 // Go package import path for generated code
-option go_package = "github.com/linchenxuan/strix/net";
+option go_package = "github.com/linchenxuan/strix/network/pb";
 
-// EAsuraRetCode defines standardized error codes that need to be understood by both servers and clients
-// Values 0-10000 are reserved for framework-level errors that clients must handle appropriately
+// EAsuraRetCode defines a set of standardized error codes used across the Strix framework
+// for both server-side and client-side communication.
+// Values 0-10000 are reserved for framework-level errors that clients must handle appropriately.
 enum EAsuraRetCode {
-    // AsuraRetCodeOK indicates successful operation completion
+    // AsuraRetCodeOK indicates that the operation completed successfully.
     AsuraRetCodeOK = 0;
-    
-    // RPCDeadlineExceeded indicates the request exceeded its deadline
-    // This is a client-triggered request that should not be automatically retried
-    // Clients must explicitly retry if needed
-    RPCDeadlineExceeded = 408;
-    
-    // AsuraMax defines the upper bound for framework-level error codes
-    // All values less than or equal to this are reserved for Asura framework use
+
+    // RPCDeadlineExceeded indicates that a Remote Procedure Call (RPC) exceeded its configured deadline.
+    // This is typically a client-triggered error and implies the request was too slow.
+    // Clients should not automatically retry this type of error; explicit retry logic is required if needed.
+    RPCDeadlineExceeded = 408; // Standard HTTP 408 Request Timeout code is used.
+
+    // AsuraMax defines the upper boundary for framework-reserved error codes.
+    // All error codes with a value less than or equal to AsuraMax are reserved for
+    // the core Asura framework's internal use.
     AsuraMax = 9999;
 }
 
-// P2PRoute represents point-to-point routing for direct entity-to-entity communication
-// Used for targeted messaging between specific game entities (players, NPCs, rooms, etc.)
+// P2PRoute represents a point-to-point routing strategy for direct communication
+// between two specific entities. This is used for targeted messaging where
+// the sender knows the exact recipient's entity ID.
 message P2PRoute {
-    // DstEntityID is the unique identifier of the target entity
-    // This should be the globally unique entity ID within the cluster
+    // DstEntityID is the unique identifier of the target entity for this communication.
+    // This ID should be globally unique within the distributed cluster.
     uint32 DstEntityID = 1;
 }
 
-// RandRoute represents random routing strategy for load distribution
-// Routes messages to a random instance within a functional group
+// RandRoute represents a random routing strategy primarily used for load distribution.
+// Messages are routed to a randomly selected instance within a defined functional group,
+// promoting even load balancing. It also supports deterministic routing for specific use cases.
 message RandRoute {
-    // FuncID identifies the functional group for routing
-    // Maps to specific service types (login, matchmaking, chat, etc.)
+    // FuncID identifies the functional group or service type (e.g., login, matchmaking, chat)
+    // to which the message should be routed.
     uint32 FuncID = 1;
-    
-    // UseConstantRoute enables deterministic routing for testing/debugging
-    // When true, uses ConstantKey for consistent routing decisions
+
+    // UseConstantRoute, when true, enables deterministic routing behavior.
+    // If set, the `ConstantKey` will be used to consistently route messages to the same
+    // instance within the functional group, useful for testing or session stickiness.
     bool UseConstantRoute = 2;
-    
-    // ConstantKey provides deterministic routing key when UseConstantRoute is true
-    // Useful for testing scenarios requiring predictable routing
+
+    // ConstantKey provides a deterministic routing key when `UseConstantRoute` is true.
+    // Messages with the same `FuncID` and `ConstantKey` will always be routed to the same instance.
     uint64 ConstantKey = 3;
+
+    // AreaID specifies the target area or region for routing within the functional group.
+    // This allows for geographically or logically segmented routing, directing messages
+    // to instances serving a particular area (e.g., specific data centers, geographical regions).
+    // When used, the random routing will only consider instances within this specified area.
+    uint32 AreaID = 4;
 }
 
-// BroadCastRoute represents broadcast routing to all instances within a functional group
-// Used for global notifications, announcements, or state synchronization
+// BroadCastRoute represents a broadcast routing strategy.
+// Messages are sent to all available instances within a specified functional group and area.
+// This is typically used for global notifications, announcements, or state synchronization.
 message BroadCastRoute {
-    // FuncID identifies the functional group to broadcast to
+    // FuncID identifies the functional group or service type to which the broadcast message should be sent.
     uint32 FuncID = 1;
+
+    // AreaID specifies the target area or region within the functional group for the broadcast.
+    // Only instances within this specified area will receive the broadcast message.
+    uint32 AreaID = 2;
 }
 
-// MultiCastRoute represents multicast routing to specific entity IDs
-// Allows selective messaging to multiple predefined recipients
+// MultiCastRoute represents a multicast routing strategy.
+// Messages are sent to a predefined list of specific entity IDs.
+// This allows for selective messaging to multiple, but not necessarily all, recipients.
 message MultiCastRoute {
-    // EntityIDs is the list of target entity identifiers
-    // Each ID must be a valid entity identifier within the cluster
+    // EntityIDs is a list of unique identifiers for the target entities that should receive the message.
     repeated int32 EntityIDs = 1;
 }
 
-// RouteHead encapsulates complete routing information for message delivery
-// Provides the routing layer with all necessary context for message dispatch
+// InternalRoute 迁移过程中sidecar后端svr之间通信.
+message InternalRoute
+{
+    int32 PipeIdx = 1;
+}
+
+// RouteHead encapsulates all routing information necessary for message delivery
+// within the Strix distributed framework. It acts as an envelope for the message,
+// guiding it through the network to its ultimate destination.
 message RouteHead {
-    // SrcEntityID identifies the originating entity
-    // Used for response routing and audit trails
+    // SrcEntityID identifies the originating entity of the message.
+    // This is crucial for response routing, logging, and audit trails.
     uint32 SrcEntityID = 1;
-    
-    // MsgID is the unique message type identifier
-    // Maps to specific protobuf message types in the application layer
+
+    // MsgID is the unique identifier for the type of message being sent.
+    // This ID maps to specific protobuf message types and their handlers in the application layer.
     string MsgID = 2;
-    
-    // RouteType specifies the routing strategy for this message
-    // Exactly one of these routing types must be specified
+
+    // RouteType is a oneof field, meaning exactly one of its members must be set.
+    // It specifies the particular routing strategy to be applied for this message.
     oneof RouteType {
-        // P2P routing for direct entity communication
+        // P2P represents point-to-point routing for direct entity communication.
         P2PRoute P2P = 3;
-        
-        // Rand routing for load-balanced distribution
+
+        // Rand represents random routing for load-balanced distribution across a functional group.
         RandRoute Rand = 4;
-        
-        // BroadCast routing for global notifications
+
+        // BroadCast represents broadcast routing for sending to all instances within a functional group and area.
         BroadCastRoute BroadCast = 5;
-        
-        // MultiCastRoute routing for selective multicasting
+
+        // MultiCast represents multicast routing for sending to a specific list of entities.
         MultiCastRoute MultiCast = 6;
+
+        InternalRoute Internal = 7;
     }
+
+    // SrcSetVersion is the version number of the server set that originated the request.
+    // This can be used for version compatibility checks in routing.
+    uint64 SrcSetVersion = 8;
+
+    // DstSetVersion specifies the target version number of the server set for routing.
+    // A value of 0 indicates that no specific version is required, and any compatible version will be used.
+    uint64 DstSetVersion = 9;
 }
 
-// PackageHead contains metadata for individual message packages
-// Provides envelope information for message processing and routing
+// PackageHead contains metadata for individual message packages, providing essential
+// envelope information for message processing, routing, and error handling.
 message PackageHead {
-    // MsgID identifies the message type for handler dispatch
+    // MsgID identifies the type of message contained in the package, crucial for handler dispatch.
     string MsgID = 1;
-    
-    // RetCode indicates the operation result status
-    // Should be one of the EAsuraRetCode values
+
+    // RetCode indicates the operation result status of the message.
+    // It should typically be one of the `EAsuraRetCode` values.
     int32 RetCode = 2;
-    
-    // SvrPkgSeq is the server-side package sequence number
-    // Starts from 1 for each server instance
+
+    // SvrPkgSeq is a server-side package sequence number, primarily for internal server tracking.
+    // It typically starts from 1 for each server instance.
     fixed32 SvrPkgSeq = 3;
-    
-    // CliPkgSeq is the client-side package sequence number
-    // Starts from 1 for each client connection
+
+    // CliPkgSeq is a client-side package sequence number, primarily for client-server synchronization.
+    // It typically starts from 1 for each client connection.
     fixed32 CliPkgSeq = 4;
-    
-    // SrcActorID identifies the originating actor/entity
-    // Can be player UID, room ID, or any other entity identifier
+
+    // SrcActorID identifies the originating actor or entity (e.g., player UID, room ID) of the message.
     uint64 SrcActorID = 5;
-    
-    // DstActorID identifies the target actor/entity
-    // Can be player UID, room ID, or any other entity identifier
+
+    // DstActorID identifies the target actor or entity of the message.
     uint64 DstActorID = 6;
-    
-    // SrcCliVersion indicates the client version of the request originator
+
+    // SrcCliVersion indicates the client version of the message originator, useful for compatibility checks.
     int64 SrcCliVersion = 7;
+
+    map<string, string> Meta = 8;
 }
 
-// PkgRouteHeader combines routing and package metadata
-// Provides complete message context for processing
+// PkgRouteHeader combines both routing information and package metadata
+// into a single structure, providing a complete context for message processing
+// and dispatch within the Strix framework.
 message PkgRouteHeader {
-    // RouteHdr contains routing information for message dispatch
+    // RouteHdr contains comprehensive routing information for message delivery.
     RouteHead RouteHdr = 1;
-    
-    // PkgHdr contains package-level metadata
+
+    // PkgHdr contains package-level metadata for message processing and control.
     PackageHead PkgHdr = 2;
 }

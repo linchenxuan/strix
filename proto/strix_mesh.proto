@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package mesh;
+
+option go_package = "github.com/linchenxuan/strix/network/pb";
+
+enum EPBMsgType
+{
+	PBMT_NONE=0;
+	PBMT_MIN=100;
+
+	PBMT_NTY_UNIXSOCK_HEATBEAT=201;
+	PBMT_REQ_UNIXSOCK_REGISTER=203;
+	PBMT_RSP_UNIXSOCK_REGISTER=204;
+	PBMT_NTY_UNIXSOCK_CONNECT=205;
+	PBMT_NTY_UNIXSOCK_DISCONNECT=207;
+	PBMT_NTY_UNIXSOCK_RECVEVENTFD=209;
+	PBMT_NTY_UNIXSOCK_UNREGISTER=211;
+	PBMT_NTY_UNIXSOCK_DYNAMIC_LOAD=213;
+    PBMT_REQ_UNIXSOCK_CHG_PIPEIDX = 214;
+    PBMT_RES_UNIXSOCK_CHG_PIPEIDX = 215;
+
+	PBMT_NTY_NET_HEATBEAT=301;
+	PBMT_REQ_NET_REGISTER=302;
+	PBMT_RSP_NET_REGISTER=303;
+
+	PBMT_REQ_ROUTER_REGISTER=601;
+	PBMT_RES_ROUTER_REGISTER=602;
+
+	PBMT_REQ_ROUTER_UNREGISTER=603;
+	PBMT_RES_ROUTER_UNREGISTER=604;
+
+    PBMT_REQ_START_MIGRATE = 801;
+    PBMT_RES_START_MIGRATE = 802;
+    PBMT_NTY_SIDECAR_MIGRATE_FINISH = 803;
+    PBMT_NTY_BACKENDSVR_STOP = 804;
+    PBMT_NTY_NEWSVR_MIGRATE_FINISH = 805;
+
+	PBMT_MAX=60000;
+}
+
+
+message NamingRegiserOption
+{
+	bool is_stateful_service    = 1; // Whether it is a stateful service
+	bool need_master_selection  = 2; // Whether to participate in master selection
+	bool need_backup            = 3; // Whether a backup is needed
+	int32 static_weight         = 4; // Static weight
+	int32 dynamic_weight        = 5; // Dynamic weight
+	bool is_health              = 6; // Whether it is in a healthy state at the time of registration
+    int32 pipe_idx              = 7; // shm pipe index
+    uint32 svr_unqueid          = 8; // Unique process identifier, used to distinguish between old and new processes with the same process ID
+    int64 version               = 9; // Identifier sent by the sidecar to the process
+}
+
+message ServiceQueryInfo
+{
+	string ServiceName = 1;
+    string ServiceID = 2;
+    repeated string Tags = 3;
+	uint64 SetVersion = 4; // The Set version number of the server, e.g., 2024030812350943
+}
+
+message MsgRspResult
+{
+	int32 err_code=1;
+	string reason=2;
+}
+
+// Server status
+enum ESvrState
+{
+	ST_HEALTH = 0; // Healthy (will set itself to a healthy state in consul)
+	ST_GRACEFUL_EXIT = 1; // In graceful exit (will set itself to a grayscale state in consul, this state is used during grayscale updates)
+	ST_FASTEXIT = 2; // Shared memory restart (will set itself to a healthy state in consul)
+}
+
+message MsgNtyUnixSockHeartBeat
+{
+	ESvrState state     = 1;
+    int32 pipe_idx      = 2; // shm pipe index
+    uint32 svr_unqueid  = 3; // Unique process identifier, used to distinguish between old and new processes with the same process ID
+	uint64 set_version  = 4; // The Set version number of the server, e.g., 2024030812350943
+}
+
+message MsgReqUnixSockRegister
+{
+	ServiceQueryInfo svc_info=1;
+	NamingRegiserOption register_option=2;
+}
+
+message MsgResUnixSockRegister
+{
+	MsgRspResult result = 1;
+    int32 is_main       = 2;
+    int32 need_migreate = 3;
+    int64 version       = 4; // Identifier sent by the sidecar to the process
+}
+
+message MsgReqUnixSockChgPipeIdx {
+    int32 pipeidx = 1;
+}
+
+message MsgResUnixSockChgPipeIdx {
+    int32 result = 1;
+}
+
+message MsgNtyUnixSockUnRegister
+{
+	int32 dummy         = 1;
+	string service_id   = 2;
+    int32 pipe_idx      = 3; // shm pipe index
+    uint32 svr_unqueid  = 4; // Unique process identifier, used to distinguish between old and new processes with the same process ID
+}
+
+message MsgNtyUnixSockDynamicLoad
+{
+	string service_id=1;
+	int64  dynamic_load=2;
+	int64  dynamic_load_capacity=3;
+}
+
+message MsgNtyNetHeatBeat
+{
+	int32 dummy=1;
+}
+
+message MsgReqNetRegister
+{
+	ServiceQueryInfo src_svc_info=1;
+	ServiceQueryInfo dst_svc_info=2;
+}
+
+message MsgResNetRegister
+{
+	MsgRspResult result = 1;
+	ServiceQueryInfo src_svc_info=2;
+}

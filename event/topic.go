@@ -13,5 +13,3 @@ type Topic struct {
 	timeout     time.Duration // Publish timeout.
 	subscribers []Subscriber  // Subscription queue.
 }
-
-

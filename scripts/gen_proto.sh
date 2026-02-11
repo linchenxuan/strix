@@ -22,7 +22,8 @@ PROTOC_OPTS=(
 
 # Directory mapping rules based on proto file names
 declare -A OUTPUT_DIRS=(
-    ["strix_net.proto"]="./net"          # Network-related protos to net/
+    ["strix_net.proto"]="./network/pb"          # Network-related protos to network/pb
+    ["strix_mesh.proto"]="./network/pb"         # Mesh-related protos to network/pb
 )
 
 # Default directory for unmatched proto files
