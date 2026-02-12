@@ -56,7 +56,7 @@ func (s *NtfSender) NtfClient(pkg TransSendPkg, aid uint64, cs CSTransport) erro
 		pkg.PkgHdr.DstActorID = aid
 	}
 
-	return cs.SendToClient(pkg)
+	return cs.SendToClient(&pkg)
 }
 
 // NtfServer sends a notification package to another server.

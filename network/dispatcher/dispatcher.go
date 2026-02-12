@@ -8,12 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/linchenxuan/strix/metrics"
 	"github.com/linchenxuan/strix/network/handler"
 	"github.com/linchenxuan/strix/network/message"
 	"github.com/linchenxuan/strix/network/pb" // Import pb for GetPkgHdr return type
 	"github.com/linchenxuan/strix/network/transport"
-	//"github.com/linchenxuan/strix/tracing" // Removed unused import
 	"google.golang.org/protobuf/proto" // Import proto for DecodeBody return type
 )
 
@@ -28,6 +29,7 @@ type DispatcherDelivery struct {
 
 // Ensure DispatcherDelivery implements the handler.Delivery interface.
 var _ handler.Delivery = (*DispatcherDelivery)(nil)
+var _ transport.DispatcherReceiver = (*Dispatcher)(nil)
 
 // GetPkgHdr returns the package header from the embedded TransportDelivery.
 func (dd *DispatcherDelivery) GetPkgHdr() *pb.PackageHead {
@@ -199,6 +201,41 @@ func (d *Dispatcher) RegisterMsglayer(t message.MsgLayerType, m handler.MsgLayer
 		return errors.New("RegisterMsglayer: a receiver for this layer type is already registered")
 	}
 	d.msglayers[t] = m
+	return nil
+}
+
+// OnRecvTransportPkg is the entry point from the transport layer.
+// It resolves protocol metadata, builds a dispatcher delivery, then executes
+// the configured filter chain before invoking the target message layer.
+func (d *Dispatcher) OnRecvTransportPkg(td *transport.TransportDelivery) error {
+	if td == nil || td.Pkg == nil || td.Pkg.PkgHdr == nil {
+		metrics.IncrCounterWithGroup(metrics.NameDispatcherRecvFailTotal, metrics.GroupNetDispatcher, 1)
+		return errors.New("OnRecvTransportPkg: nil transport delivery or package header")
+	}
+
+	msgID := td.Pkg.PkgHdr.GetMsgID()
+	dim := metrics.Dimension{metrics.DimMsgID: msgID}
+	startTime := time.Now()
+	metrics.IncrCounterWithDimGroup(metrics.NameDispatcherRecvTotal, metrics.GroupNetDispatcher, 1, dim)
+	defer func() {
+		metrics.RecordStopwatchWithDimGroup(metrics.NameDispatcherRecvCostMS, metrics.GroupNetDispatcher, startTime, dim)
+	}()
+
+	protoInfo, ok := message.GetProtoInfo(msgID)
+	if !ok || protoInfo == nil {
+		metrics.IncrCounterWithDimGroup(metrics.NameDispatcherRecvFailTotal, metrics.GroupNetDispatcher, 1, dim)
+		return fmt.Errorf("OnRecvTransportPkg: proto info not found for message ID '%s'", msgID)
+	}
+
+	dd := &DispatcherDelivery{
+		TransportDelivery: td,
+		ProtoInfo:         protoInfo,
+	}
+
+	if err := d.filters.Handle(dd, d.handleTransportMsgImpl); err != nil {
+		metrics.IncrCounterWithDimGroup(metrics.NameDispatcherRecvFailTotal, metrics.GroupNetDispatcher, 1, dim)
+		return err
+	}
 	return nil
 }
 

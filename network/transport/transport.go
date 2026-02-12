@@ -27,7 +27,7 @@ type CSTransport interface {
 	Transport
 	// SendToClient sends a package to a specific client. The implementation is
 	// responsible for looking up the client's connection and transmitting the data.
-	SendToClient(pkg TransSendPkg) error
+	SendToClient(pkg *TransSendPkg) error
 }
 
 // SSTransport specializes the base Transport interface for Server-to-Server communication.

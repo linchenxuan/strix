@@ -115,6 +115,8 @@ type Sidecar struct {
 
 }
 
+var _ transport.SSTransport = (*Sidecar)(nil)
+
 // FactoryName returns the name of this transport factory.
 func (t *Sidecar) FactoryName() string {
 	return FactoryName

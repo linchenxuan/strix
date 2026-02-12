@@ -62,6 +62,8 @@ const (
 const (
 	// GroupStrix is the group name for strix-related metrics.
 	GroupStrix = "strix"
+	// GroupNetDispatcher is the group name for dispatcher-related network metrics.
+	GroupNetDispatcher = "net.dispatcher"
 )
 
 // Metric related constants
@@ -105,6 +107,18 @@ const (
 	// NameTransportRecvMsgTotal: Total number of messages received by the transport layer.
 	// group:strix dimension:msgid dashboard:Total number of received messages. alarm:Upward fluctuation >100%, downward >50%. owner:jonnymiao compdim:msgid:ActorWave20%
 	NameTransportRecvMsgTotal = "transport_recv_total"
+
+	// NameDispatcherRecvTotal: Total number of packages received by dispatcher.
+	// group:net.dispatcher dimension:msgid
+	NameDispatcherRecvTotal = "recv_total"
+
+	// NameDispatcherRecvFailTotal: Total number of failed package handling attempts in dispatcher.
+	// group:net.dispatcher dimension:msgid
+	NameDispatcherRecvFailTotal = "recv_fail_total"
+
+	// NameDispatcherRecvCostMS: Dispatcher package handling duration in milliseconds.
+	// group:net.dispatcher dimension:msgid
+	NameDispatcherRecvCostMS = "recv_cost_ms"
 
 	// NameSidecarReadMemUsageMaxPercent: Maximum memory usage percentage of a single process's sidecar read queue.
 	// group:strix dimension: dashboard:Max memory usage percentage of a single process's read queue. alarm:Exceeds 15%. owner:jonnymiao compdim:funcid:ActorWave20%&Base0.1&SkipNone

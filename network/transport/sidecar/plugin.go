@@ -15,6 +15,12 @@ import (
 )
 
 type factory struct{}
+var _ plugin.Factory = (*factory)(nil)
+
+// NewFactory creates a sidecar transport plugin factory.
+func NewFactory() plugin.Factory {
+	return &factory{}
+}
 
 // Type returns the plugin type.
 func (s *factory) Type() plugin.Type {
@@ -33,12 +39,12 @@ func (r *factory) ConfigType() any {
 }
 
 // Setup initializes a plugin instance based on the configuration.
-func (r *factory) Setup(cfgAny any) (any, error) {
+func (r *factory) Setup(cfgAny any) (plugin.Plugin, error) {
 	log.Info().Msg("Sidecar Factory Setup")
 
 	cfg, ok := cfgAny.(*SidecarConfig)
 	if !ok {
-		log.Fatal().Msg("prometheus setup failed")
+		return nil, errors.New("sidecar setup failed: invalid config type")
 	}
 
 	sidecar := &Sidecar{
@@ -56,7 +62,7 @@ func (r *factory) Setup(cfgAny any) (any, error) {
 	// 1. Configuration parsing & module initialization
 	sidecar.initMeshAddr()
 	if sidecar.state != _stateNone {
-		return nil, nil
+		return nil, errors.New("sidecar setup failed: invalid initial sidecar state")
 	}
 
 	// 2. File lock

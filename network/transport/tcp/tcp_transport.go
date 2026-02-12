@@ -62,6 +62,14 @@ type TCPTransport struct {
 	cancel           context.CancelFunc           // A function to cancel the transport's main context, shutting it down.
 }
 
+var _ transport.CSTransport = (*TCPTransport)(nil)
+var _ transport.SSTransport = (*TCPTransport)(nil)
+
+// FactoryName returns the plugin factory name that created this transport.
+func (t *TCPTransport) FactoryName() string {
+	return "tcp_transport"
+}
+
 // NewTCPTransport creates a new TCPTransport instance with the given configuration.
 func NewTCPTransport(cfg *TCPTransportCfg) (*TCPTransport, error) {
 	if err := cfg.Validate(); err != nil {

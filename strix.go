@@ -4,6 +4,8 @@ package strix
 
 import (
 	"github.com/linchenxuan/strix/log"
+	"github.com/linchenxuan/strix/network/transport/sidecar"
+	"github.com/linchenxuan/strix/network/transport/tcp"
 	"github.com/linchenxuan/strix/plugin"
 	"github.com/linchenxuan/strix/tracing"
 )
@@ -34,6 +36,8 @@ func NewStrix() (*Strix, error) {
 
 	// 2. Initialize the plugin manager.
 	pluginManager := plugin.NewManager()
+	pluginManager.RegisterFactory(tcp.NewFactory())
+	pluginManager.RegisterFactory(sidecar.NewFactory())
 
 	// 3. Initialize the tracer.
 	tracer := tracing.NewTracer()
