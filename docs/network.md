@@ -1,129 +1,205 @@
-# Network Architecture
+# 网络系统架构 (Network)
 
-The network layer of `strix` is designed to provide a high-performance, scalable, and protocol-agnostic communication foundation for real-time multiplayer games. Through a layered, interface-oriented design, it cleanly decouples underlying network connection management, network session maintenance, and message routing/dispatch from upper-level game business logic.
+## 1. 概述
 
-## Design Philosophy
+`strix` 的网络系统采用接口驱动的分层设计，当前代码中的主链路是：
 
-### 1. Layering & Decoupling
-The network layer is carefully designed into independent layers, with each layer communicating with others through interfaces.
-- **Transport Layer (`Transport`)**: A unified interface responsible for all network interactions. Depending on its specific implementation, it can act as a **listener** to accept new connections or represent an **individual connection** to handle data transmission and reception.
-- **Network Entity Layer (`Entity`)**: An abstraction of a client network session. It manages network-related states for that connection (e.g., whether it is authenticated) and can encapsulate the underlying `Transport`. The `Entity`'s responsibilities are limited to the network level.
-- **Dispatch Layer (`Dispatcher`)**: Acts as a bridge between the transport layer and the business logic layer (indirectly through the `Entity`). It receives complete message packets from a `Transport` connection, parses the message header, and routes the message to the corresponding `Entity`.
-- **Game Logic Layer**: This part (usually not belonging to the `network` package) will drive the real entities of the game world (`GameEntity`) by interacting with the `Entity`.
+`Transport -> Dispatcher -> MsgLayer -> Business Handler`
 
-This layered design allows any layer to be replaced independently. For example, we can easily switch the underlying transport from TCP to KCP without changing any logic in the `Dispatcher` and `Entity`.
+其中，`Transport` 负责收发与编解码，`Dispatcher` 负责路由与过滤，`MsgLayer` 负责具体执行模型（例如 stateful actor 模型），业务处理函数通过消息注册系统绑定到具体消息 ID。
 
-### 2. Interface-Driven
-The entire network architecture is built around a set of core interfaces (`Transport`, `Dispatcher`, `Entity`). This design encourages users to provide custom implementations according to their specific needs, giving the framework great flexibility.
+## 2. 设计目标
 
-### 3. Session-Oriented
-The core focus of the network layer is managing client sessions. Each client connection is mapped to an `Entity`, which carries all network-level information and operations for that connection, acting as a bridge between the connection and the upper-level business logic.
+### 2.1 核心目标
 
-## Core Components
+- 高性能：连接收发、消息解码、分发路径尽量精简，并集成指标埋点。
+- 可扩展：传输层、分发过滤器、消息处理层都可替换或扩展。
+- 可观测：关键链路集成 metrics / tracing，便于定位延迟与错误。
+- 解耦：网络协议细节与业务逻辑分离，业务只关注消息处理。
 
-- **`Transport`**: A unified network interface with a dual role:
-    - **Listener Role**: An implementation of `Transport` (e.g., `tcp.Listener`) is responsible for listening on a specified network address. When it accepts a new connection, it creates a new `Transport` instance for that connection (connection role).
-    - **Connection Role**: Represents an individual client connection, encapsulating all underlying I/O operations, responsible for reading, writing, and framing, and delivering complete message packets to the `Dispatcher`.
-- **`Entity`**: A network entity. It is an abstraction of a client session at the network layer. An `Entity` is associated with a `Transport` (connection role) and manages the network state of that session. **It does not directly contain game logic but is responsible for handling network-level requests (like heartbeats, authentication) and forwarding messages that require game logic processing to the upper-level game logic entity (`GameEntity`).**
-- **`EntityManager`**: The network entity manager. Responsible for the lifecycle management of `Entity` instances (creation, retrieval, destruction).
-- **`Dispatcher`**: The dispatcher. It implements the core logic of "where network messages should go." It receives raw message packets from the `Transport` (connection role), parses routing information, and delivers them to the corresponding `Entity`.
+## 3. 核心分层
 
-## Data Flow Between Modules
+### 3.1 Transport 层（`network/transport`）
 
-A typical processing flow for an upstream message (from client to server) is as follows:
-1.  **`Transport` (listener)** accepts a client `net.Conn` connection and creates a new **`Transport` (connection)** instance for it.
-2.  **`EntityManager`** creates and manages an `Entity` instance for the new `Transport` (connection).
-3.  **`Transport` (connection)** reads the byte stream from `net.Conn` and assembles it into a complete message packet (`[]byte`) according to framing rules.
-4.  The `Transport` (connection) passes this message packet to the **`Dispatcher`** for processing.
-5.  The **`Dispatcher`** receives the `Transport` (connection) instance and the message packet:
-    -   Parses the message packet to get routing information and the business message.
-    -   Looks up the target **`Entity`** through the `EntityManager` based on the routing information.
-    -   Delivers the business message to the target `Entity`.
-6.  The **`Entity`** receives the business message and forwards it to the upper-level **`GameEntity`** (game logic entity).
-7.  The **`GameEntity`** updates its state and may send a response message back to the client through the `Entity`.
-8.  The **`Entity`** receives the response message and sends it out through its associated `Transport` (connection).
-9.  The **`Transport` (connection)** receives the response message, performs serialization and framing, and then sends it back to the client.
-10. **Connection Closure**: The client disconnects or the server actively closes the `Transport` (connection). The `onClose` callback is triggered, notifying the `EntityManager` to clean up the related `Entity`.
+Transport 层对外暴露统一接口：
 
-## Quick Start
+- `Start(opt TransportOption) error`
+- `StopRecv() error`
+- `Stop() error`
 
-The following is a conceptual example showing how to assemble the various network components in the `strix` framework and start a server.
+关键点：
+
+- `TransportOption` 注入两个依赖：
+  - `Creator`：消息工厂（按 `msgID` 创建 protobuf 消息）。
+  - `Handler`：上层接收器（通常是 `Dispatcher`，实现 `OnRecvTransportPkg`）。
+- 收到完整包后，Transport 通过 `TransportDelivery` 上送：
+  - `Pkg *TransRecvPkg`：解码后的请求包。
+  - `TransSendBack`：回包函数，支持沿原链路返回响应。
+
+当前实现：
+
+- `network/transport/tcp`：TCP 长连接传输。
+- `network/transport/sidecar`：通过 Unix Socket + 共享内存与 sidecar 通信。
+
+### 3.2 Dispatcher 层（`network/dispatcher`）
+
+Dispatcher 是网络消息中枢，入口方法为：
+
+- `OnRecvTransportPkg(td *transport.TransportDelivery) error`
+
+核心职责：
+
+- 根据 `msgID` 从消息注册表读取 `MsgProtoInfo`。
+- 构建 `DispatcherDelivery` 并进入过滤器链。
+- 按 `MsgLayerType` 选择目标 `MsgLayerReceiver`。
+- 调用目标层 `OnRecvDispatcherPkg`。
+
+内置机制：
+
+- 消息过滤器链（`DispatcherFilterChain`）。
+- 接收限流（token bucket，`DispatcherRecvLimiter`）。
+- 指标埋点：接收总量、失败数、处理耗时等。
+
+### 3.3 MsgLayer 层（`network/handler`）
+
+`MsgLayerReceiver` 统一入口：
+
+- `OnRecvDispatcherPkg(delivery handler.Delivery) error`
+
+当前仓库内的主要实现为：
+
+- `network/handler/stateful`：基于 Actor 的有状态模型。
+
+stateful 模型特征：
+
+- 一个 actor 对应一个串行处理循环，避免同 actor 内部并发竞争。
+- 按需创建 actor，支持生命周期管理、定时 tick、空闲回收。
+- 请求消息可通过 `TransSendBack` 直接回包。
+
+说明：
+
+- `message.MsgLayerType` 中包含 `Stateless` 与 `Stateful` 两种层类型。
+- 当前仓库主要提供 `Stateful` 的完整实现；`Stateless` 可按同一接口自行实现并注册。
+
+### 3.4 业务处理层（消息处理函数）
+
+业务处理函数不直接耦合 Transport/Dispatcher，而是通过消息注册表关联：
+
+- `message.RegisterMsgInfo(...)`：注册消息元信息。
+- `message.RegisterMsgHandle(msgID, handle, msgLayerType)`：绑定处理函数和目标层。
+
+Dispatcher 根据 `msgID -> MsgProtoInfo -> MsgLayerType` 路由到对应处理层。
+
+## 4. 关键数据结构
+
+### 4.1 `transport.TransportDelivery`
+
+Transport 上送给 Dispatcher 的载体：
+
+- `Pkg`：解码后的包头/包体。
+- `TransSendBack`：发送响应的回调。
+
+### 4.2 `dispatcher.DispatcherDelivery`
+
+Dispatcher 内部载体，基于 `TransportDelivery` 增强：
+
+- `ProtoInfo`：消息协议元信息（消息类型、目标层等）。
+- `ResOpts`：回包可选参数。
+
+### 4.3 `handler.Delivery`
+
+MsgLayer 看到的是抽象接口，而非 Dispatcher 具体类型，降低层间耦合。
+
+## 5. 端到端消息流程
+
+以 TCP 入站消息为例：
+
+1. `TCPTransport` 读取 prehead + payload，解码为 `TransRecvPkg`。
+2. 构建 `TransportDelivery{Pkg, TransSendBack}`。
+3. 调用 `Dispatcher.OnRecvTransportPkg(...)`。
+4. Dispatcher 通过 `msgID` 查询 `message.GetProtoInfo`。
+5. 经过过滤器链（消息过滤、限流等）。
+6. 按 `MsgLayerType` 选中目标 `MsgLayerReceiver`。
+7. 目标层处理消息（例如 stateful 层投递到 actor mailbox）。
+8. 若为请求消息，处理层通过 `TransSendBack` 返回响应。
+
+## 6. 最小装配示例（基于当前 API）
+
+下面示例演示真实 API 的装配方式，突出网络主链路；业务细节省略。
 
 ```go
 package main
 
 import (
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
+	"fmt"
 
-	"github.com/linchenxuan/strix/network"
-    // Assuming we have these concrete implementation packages
-	"github.com/linchenxuan/strix/transport/tcp" // A specific TCP transport implementation
-	"github.com/linchenxuan/strix/network" // DefaultDispatcher is now under the network package
-
+	"github.com/linchenxuan/strix/network/dispatcher"
+	"github.com/linchenxuan/strix/network/handler"
+	"github.com/linchenxuan/strix/network/message"
+	"github.com/linchenxuan/strix/network/transport"
+	"github.com/linchenxuan/strix/network/transport/tcp"
+	"google.golang.org/protobuf/proto"
 )
 
+// 适配 message 包的全局函数为 MsgCreator 接口。
+type msgCreator struct{}
+
+func (msgCreator) CreateMsg(msgID string) (proto.Message, error) { return message.CreateMsg(msgID) }
+func (msgCreator) ContainsMsg(msgID string) bool                 { return message.ContainsMsg(msgID) }
+
+// 示例 MsgLayerReceiver。
+type demoLayer struct{}
+
+func (demoLayer) OnRecvDispatcherPkg(delivery handler.Delivery) error {
+	fmt.Println("recv msg:", delivery.GetPkgHdr().GetMsgID())
+	return nil
+}
+
 func main() {
-    // 1. Create a network entity manager
-    entityManager := network.NewInMemoryEntityManager()
-    log.Println("Network entity manager created.")
+	// 1) 创建 transport
+	tp, err := tcp.NewTCPTransport(&tcp.TCPTransportCfg{
+		Addr:            ":9000",
+		IdleTimeout:     60,
+		SendChannelSize: 1024,
+		MaxBufferSize:   1 << 20,
+	})
+	if err != nil {
+		panic(err)
+	}
 
-    // 2. Create a message dispatcher
-    appDispatcher := network.NewDefaultDispatcher()
-    log.Println("Message dispatcher created.")
+	// 2) 创建 dispatcher
+	dp, err := dispatcher.NewDispatcher(&dispatcher.DispatcherConfig{
+		RecvRateLimit: 10000,
+		TokenBurst:    1000,
+	}, []transport.Transport{tp})
+	if err != nil {
+		panic(err)
+	}
 
-    // 3. Create and configure the network listener
-    // Note: We are creating a listener implementation of the Transport interface
-    listener := tcp.NewListener(":8080")
-    log.Println("TCP listener created, listening on :8080.")
+	// 3) 注册消息层（这里用示例 layer）
+	if err := dp.RegisterMsglayer(message.MsgLayerType_Stateless, demoLayer{}); err != nil {
+		panic(err)
+	}
 
-    // 4. Define callback functions
-    // When a new connection is made, an Entity is created to manage it
-    onNewConnection := func(conn network.Transport) {
-        log.Printf("New connection established: %s (ID: %d)", conn.RemoteAddr(), conn.ID())
-        // Create an Entity for the new Transport connection
-        _, err := entityManager.CreateEntity(conn)
-        if err != nil {
-            log.Printf("Failed to create Entity for connection %d: %v", conn.ID(), err)
-            conn.Close()
-        }
-    }
+	// 4) 启动 transport，并把 dispatcher 作为上层 handler 注入
+	if err := tp.Start(transport.TransportOption{
+		Creator: msgCreator{},
+		Handler: dp,
+	}); err != nil {
+		panic(err)
+	}
 
-    // When a connection receives a message, it calls the Dispatcher for processing
-    onMessage := func(conn network.Transport, message []byte) {
-        appDispatcher.Dispatch(conn, message)
-    }
-
-    // When a connection is closed, clean up the related Entity
-    onClose := func(conn network.Transport) {
-        log.Printf("Connection closed: %s (ID: %d)", conn.RemoteAddr(), conn.ID())
-        entityManager.RemoveEntity(entityManager.GetEntityByTransportID(conn.ID()).ID())
-    }
-
-    // 5. Start the listener
-    // The Listen method will block or run in the background and start accepting connections
-    go func() {
-        err := listener.Listen(onNewConnection, onMessage, onClose)
-        if err != nil {
-            log.Fatalf("Failed to start listener: %v", err)
-        }
-    }()
-
-    log.Println("Server started, waiting for client connections...")
-
-    // Wait for an interrupt signal to achieve graceful shutdown
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-
-    log.Println("Server is shutting down...")
-    listener.Stop() // Stopping the listener will close all accepted connections
-    log.Println("Server shut down successfully.")
+	select {}
 }
 ```
 
-## Summary
+## 7. 配置与扩展建议
 
-Through clear layering and interface abstraction, the `strix` network layer provides a robust and flexible underlying communication framework. The introduction of the unified `Transport` interface and the `Entity` clearly defines the boundary between network session management and game business logic. This design allows developers to focus on their respective domains while ensuring the framework's advantages in terms of functional extension and maintenance.
+- 新增传输协议：实现 `transport.Transport`，并在 `Start` 中接入 `TransportOption.Handler`。
+- 新增消息处理模型：实现 `handler.MsgLayerReceiver`，并调用 `RegisterMsglayer`。
+- 新增治理能力：通过 `DispatcherFilter` 扩展认证、灰度、审计等中间逻辑。
+- 新增消息类型：注册 `MsgProtoInfo` 与对应 handler，确保 `msgID`、`MsgLayerType` 一致。
+
+## 8. 总结
+
+当前代码下，`strix` 网络系统的真实架构是以 `Transport -> Dispatcher -> MsgLayer` 为骨干，辅以消息注册表完成协议到业务处理函数的映射。它将网络收发、分发治理与业务执行模型清晰分层，便于在高并发场景下持续演进和扩展。

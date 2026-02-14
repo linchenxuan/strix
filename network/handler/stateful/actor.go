@@ -169,39 +169,6 @@ func (a *actorRuntime) postPkg(hCtx *HandleContext) error {
 	}
 }
 
-// oneLoop represents a single iteration of the actor's main event loop.
-// It uses a `select` statement to react to three types of events in order of priority:
-// 1. Context cancellation (shutdown signal).
-// 2. An incoming message from the mailbox.
-// 3. A periodic tick.
-func (a *actorRuntime) oneLoop() {
-	// The ticker is created inside the loop in some actor models to allow for dynamic tick rates,
-	// but here it's created once in runLoop for simplicity. Let's adjust comment for the existing code.
-	t := time.NewTicker(time.Millisecond * time.Duration(a.msgLayer.TickPeriodMillSec))
-	defer t.Stop()
-
-	select {
-	case <-a.ctx.Done():
-		// Shutdown signal received.
-		a.closed.Store(true)
-		// Process any remaining messages in the channel before exiting.
-		a.dealLeftTask()
-		// Call the actor's cleanup logic.
-		a.actor.OnGracefulExit()
-
-	case hCtx := <-a.pkgCtxChan:
-		// A new message has arrived.
-		a.lastActive = time.Now().Unix()
-		if err := a.handlePkg(hCtx); err != nil {
-			hCtx.Error().Err(err).Msg("failed to handle package")
-		}
-
-	case <-t.C:
-		// A periodic tick has occurred.
-		a.tick()
-	}
-}
-
 // dealLeftTask processes all remaining messages in the mailbox during a graceful shutdown.
 // This ensures that no messages are lost when the actor is terminated.
 func (a *actorRuntime) dealLeftTask() {
@@ -223,7 +190,7 @@ func (a *actorRuntime) dealLeftTask() {
 }
 
 // runLoop starts and manages the actor's main event processing loop.
-// It first initializes the actor, then continuously calls `oneLoop` until the actor is closed.
+// It initializes the actor once, then drives mailbox/tick/shutdown on a single select loop.
 func (a *actorRuntime) runLoop() {
 	a.actor.Info().Msg("stateful actor task loop started")
 	defer a.actor.Info().Msg("stateful actor task loop exited")
@@ -233,8 +200,24 @@ func (a *actorRuntime) runLoop() {
 		return
 	}
 
-	for !a.closed.Load() {
-		a.oneLoop()
+	ticker := time.NewTicker(time.Millisecond * time.Duration(a.msgLayer.TickPeriodMillSec))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			a.closed.Store(true)
+			a.dealLeftTask()
+			a.actor.OnGracefulExit()
+			return
+		case hCtx := <-a.pkgCtxChan:
+			a.lastActive = time.Now().Unix()
+			if err := a.handlePkg(hCtx); err != nil {
+				hCtx.Error().Err(err).Msg("failed to handle package")
+			}
+		case <-ticker.C:
+			a.tick()
+		}
 	}
 }
 
