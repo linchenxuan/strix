@@ -24,7 +24,18 @@ var (
 	ErrConfigDecode = errors.New("config decode error")
 	// ErrFactorySetup 表示工厂初始化插件实例失败。
 	ErrFactorySetup = errors.New("factory setup error")
+	// ErrFactoryDestroy 表示工厂销毁插件实例失败。
+	ErrFactoryDestroy = errors.New("factory destroy error")
 )
+
+// initializedPlugin 记录一次 setup 成功创建的插件实例及其工厂信息。
+type initializedPlugin struct {
+	pluginType  Type
+	instanceKey string
+	factoryName string
+	factory     Factory
+	plugin      Plugin
+}
 
 // Manager 负责管理插件工厂与插件实例。
 type Manager struct {
@@ -61,53 +72,77 @@ func (m *Manager) RegisterFactory(factory Factory) {
 // pluginConf 对应配置文件中的 [plugin] 节点。
 func (m *Manager) SetupPlugins(pluginConf Config) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	initialized := make([]initializedPlugin, 0)
 
 	for pluginType, factoryConfigs := range pluginConf {
 		factories, ok := m.factories[pluginType]
 		if !ok {
 			continue
 		}
-		if err := m.setupPluginsByType(pluginType, factoryConfigs, factories); err != nil {
+		added, err := m.setupPluginsByType(pluginType, factoryConfigs, factories)
+		initialized = append(initialized, added...)
+		if err != nil {
+			rollbackTargets := m.rollbackPlugins(initialized)
+			m.mu.Unlock()
+			rollbackErr := destroyPlugins(rollbackTargets)
+			if rollbackErr != nil {
+				return errors.Join(err, rollbackErr)
+			}
 			return err
 		}
 	}
+	m.mu.Unlock()
 	return nil
 }
 
 // setupPluginsByType 初始化某一插件类型下的所有插件实例。
-func (m *Manager) setupPluginsByType(pluginType Type, factoryConfigs TypeConfig, factories map[string]Factory) error {
+func (m *Manager) setupPluginsByType(pluginType Type, factoryConfigs TypeConfig, factories map[string]Factory) ([]initializedPlugin, error) {
+	added := make([]initializedPlugin, 0, len(factoryConfigs))
 	for factoryName, factoryConfig := range factoryConfigs {
-		if err := m.setupSinglePlugin(pluginType, factoryName, factoryConfig, factories); err != nil {
-			return err
+		ins, err := m.setupSinglePlugin(pluginType, factoryName, factoryConfig, factories)
+		if err != nil {
+			return added, err
 		}
+		added = append(added, ins)
 	}
 
-	return nil
+	return added, nil
 }
 
 // setupSinglePlugin 初始化并注册一个插件实例。
-func (m *Manager) setupSinglePlugin(pluginType Type, factoryName string, factoryConfig RawConfig, factories map[string]Factory) error {
+func (m *Manager) setupSinglePlugin(pluginType Type, factoryName string, factoryConfig RawConfig, factories map[string]Factory) (initializedPlugin, error) {
 	factory, ok := factories[factoryName]
 	if !ok {
-		return fmt.Errorf("%w: plugin factory not found for type '%s' and name '%s'", ErrPluginNotFound, pluginType, factoryName)
+		return initializedPlugin{}, fmt.Errorf("%w: plugin factory not found for type '%s' and name '%s'", ErrPluginNotFound, pluginType, factoryName)
 	}
 
 	targetConfig, err := decodeConfig(factory, pluginType, factoryName, factoryConfig)
 	if err != nil {
-		return err
+		return initializedPlugin{}, err
 	}
 
 	pluginInstance, err := factory.Setup(targetConfig)
 	if err != nil {
-		return fmt.Errorf("%w: failed to setup plugin '%s':'%s': %v", ErrFactorySetup, pluginType, factoryName, err)
+		return initializedPlugin{}, fmt.Errorf("%w: failed to setup plugin '%s':'%s': %v", ErrFactorySetup, pluginType, factoryName, err)
 	}
 
 	instanceKey := buildInstanceKey(factoryName, factoryConfig)
 	if err := m.registerPlugin(pluginType, instanceKey, pluginInstance); err != nil {
-		return err
+		if destroyErr := safeDestroy(factory, pluginInstance); destroyErr != nil {
+			return initializedPlugin{}, errors.Join(
+				err,
+				fmt.Errorf("%w: failed to destroy plugin '%s' of type '%s' after register failure: %v", ErrFactoryDestroy, instanceKey, pluginType, destroyErr),
+			)
+		}
+		return initializedPlugin{}, err
 	}
-	return nil
+	return initializedPlugin{
+		pluginType:  pluginType,
+		instanceKey: instanceKey,
+		factoryName: factoryName,
+		factory:     factory,
+		plugin:      pluginInstance,
+	}, nil
 }
 
 // decodeConfig 将原始配置解码到工厂声明的配置结构体中。
@@ -174,4 +209,95 @@ func (m *Manager) GetPlugin(pluginType Type, instanceName string) (Plugin, error
 // GetDefaultPlugin 获取指定类型的默认插件实例。
 func (m *Manager) GetDefaultPlugin(pluginType Type) (Plugin, error) {
 	return m.GetPlugin(pluginType, DefaultInstanceName)
+}
+
+// Destroy 销毁并清空当前已初始化的所有插件实例。
+func (m *Manager) Destroy() error {
+	m.mu.Lock()
+	destroyTargets, collectErr := m.collectDestroyTargets()
+	m.plugins = make(map[Type]map[string]Plugin)
+	m.mu.Unlock()
+
+	destroyErr := destroyPlugins(destroyTargets)
+	if collectErr != nil && destroyErr != nil {
+		return errors.Join(collectErr, destroyErr)
+	}
+	if collectErr != nil {
+		return collectErr
+	}
+	return destroyErr
+}
+
+// rollbackPlugins 回滚本次 SetupPlugins 已创建的实例。
+// 调用方必须持有 m.mu 写锁。
+func (m *Manager) rollbackPlugins(initialized []initializedPlugin) []initializedPlugin {
+	targets := make([]initializedPlugin, 0, len(initialized))
+	for i := len(initialized) - 1; i >= 0; i-- {
+		ins := initialized[i]
+		if pluginsByType, ok := m.plugins[ins.pluginType]; ok {
+			delete(pluginsByType, ins.instanceKey)
+			if len(pluginsByType) == 0 {
+				delete(m.plugins, ins.pluginType)
+			}
+		}
+		targets = append(targets, ins)
+	}
+	return targets
+}
+
+// collectDestroyTargets 收集销毁目标并校验对应工厂是否存在。
+// 调用方必须持有 m.mu 写锁。
+func (m *Manager) collectDestroyTargets() ([]initializedPlugin, error) {
+	targets := make([]initializedPlugin, 0)
+	var errs []error
+
+	for pluginType, instances := range m.plugins {
+		factoriesByType := m.factories[pluginType]
+		for instanceKey, pluginInstance := range instances {
+			if pluginInstance == nil {
+				errs = append(errs, fmt.Errorf("%w: plugin '%s' of type '%s' is nil", ErrPluginNotFound, instanceKey, pluginType))
+				continue
+			}
+
+			factoryName := pluginInstance.FactoryName()
+			factory, ok := factoriesByType[factoryName]
+			if !ok {
+				errs = append(errs, fmt.Errorf("%w: plugin factory '%s' not found for plugin '%s' of type '%s'", ErrPluginNotFound, factoryName, instanceKey, pluginType))
+				continue
+			}
+
+			targets = append(targets, initializedPlugin{
+				pluginType:  pluginType,
+				instanceKey: instanceKey,
+				factoryName: factoryName,
+				factory:     factory,
+				plugin:      pluginInstance,
+			})
+		}
+	}
+
+	return targets, errors.Join(errs...)
+}
+
+func destroyPlugins(targets []initializedPlugin) error {
+	var errs []error
+	for _, target := range targets {
+		if err := safeDestroy(target.factory, target.plugin); err != nil {
+			errs = append(errs, fmt.Errorf(
+				"%w: failed to destroy plugin '%s' of type '%s' with factory '%s': %v",
+				ErrFactoryDestroy, target.instanceKey, target.pluginType, target.factoryName, err,
+			))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func safeDestroy(factory Factory, plugin Plugin) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	factory.Destroy(plugin)
+	return nil
 }

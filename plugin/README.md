@@ -39,11 +39,13 @@
 - `SetupPlugins(pluginConf Config) error`：按配置初始化插件
 - `GetPlugin(pluginType Type, instanceName string) (Plugin, error)`：按类型 + 名称获取实例
 - `GetDefaultPlugin(pluginType Type) (Plugin, error)`：获取默认实例（键为 `default`）
+- `Destroy() error`：销毁并清空已初始化的插件实例
 
 说明：
 
 - `Manager` 内部使用读写锁，支持并发读取
 - 同一插件类型下，实例键不能重复，否则返回 `ErrDuplicatePlugin`
+- `SetupPlugins` 在初始化过程中若失败，会回滚并销毁本次已成功创建的实例
 
 ## 配置结构
 
@@ -101,6 +103,10 @@ if err != nil {
 	// 处理获取失败
 }
 _ = ins
+
+if err := mgr.Destroy(); err != nil {
+	// 处理销毁失败
+}
 ```
 
 ## 常见错误
@@ -110,6 +116,7 @@ _ = ins
 - `ErrInvalidFactoryConfig`：工厂配置定义不合法（如工厂未提供配置结构体）
 - `ErrConfigDecode`：配置解码失败
 - `ErrFactorySetup`：工厂 `Setup` 执行失败
+- `ErrFactoryDestroy`：工厂 `Destroy` 执行失败
 
 ## 新增一个插件实现
 

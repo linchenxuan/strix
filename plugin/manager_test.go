@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,8 @@ type MockFactory struct {
 	// 测试统计字段。
 	SetupCount   int
 	DestroyCount int
+	SetupErr     error
+	DestroyPanic bool
 }
 
 func (m *MockFactory) Type() Type   { return m.PluginType }
@@ -28,10 +31,16 @@ func (m *MockFactory) ConfigType() any {
 	return &MockConfig{}
 }
 func (m *MockFactory) Setup(config any) (Plugin, error) {
+	if m.SetupErr != nil {
+		return nil, m.SetupErr
+	}
 	m.SetupCount++
 	return &MockPlugin{Factory: m.ImplName}, nil
 }
 func (m *MockFactory) Destroy(p Plugin) {
+	if m.DestroyPanic {
+		panic("mock destroy panic")
+	}
 	m.DestroyCount++
 }
 
@@ -114,8 +123,10 @@ func TestManager(t *testing.T) {
 	t.Run("ErrorOnDuplicateTag", func(t *testing.T) {
 		manager := NewManager()
 
-		manager.RegisterFactory(&MockFactory{PluginType: logType, ImplName: "logger1"})
-		manager.RegisterFactory(&MockFactory{PluginType: logType, ImplName: "logger2"})
+		f1 := &MockFactory{PluginType: logType, ImplName: "logger1"}
+		f2 := &MockFactory{PluginType: logType, ImplName: "logger2"}
+		manager.RegisterFactory(f1)
+		manager.RegisterFactory(f2)
 
 		pluginConf := Config{
 			logType: TypeConfig{
@@ -130,6 +141,10 @@ func TestManager(t *testing.T) {
 
 		err := manager.SetupPlugins(pluginConf)
 		assert.ErrorIs(t, err, ErrDuplicatePlugin)
+		// 第二个插件 setup 成功但注册失败，应被即时销毁，避免泄漏。
+		assert.Equal(t, 1, f2.DestroyCount)
+		_, getErr := manager.GetPlugin(logType, "default")
+		assert.ErrorIs(t, getErr, ErrPluginNotFound)
 	})
 
 	t.Run("ErrorOnMissingFactory", func(t *testing.T) {
@@ -196,5 +211,55 @@ func TestManager(t *testing.T) {
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidFactoryConfig)
 		})
+	})
+
+	t.Run("DestroyPlugins", func(t *testing.T) {
+		manager := NewManager()
+		f1 := &MockFactory{PluginType: logType, ImplName: "logger1"}
+		f2 := &MockFactory{PluginType: logType, ImplName: "logger2"}
+		manager.RegisterFactory(f1)
+		manager.RegisterFactory(f2)
+
+		pluginConf := Config{
+			logType: TypeConfig{
+				"logger1": RawConfig{"tag": "default"},
+				"logger2": RawConfig{"tag": "logger2"},
+			},
+		}
+		err := manager.SetupPlugins(pluginConf)
+		assert.NoError(t, err)
+
+		err = manager.Destroy()
+		assert.NoError(t, err)
+		assert.Equal(t, 1, f1.DestroyCount)
+		assert.Equal(t, 1, f2.DestroyCount)
+
+		_, err = manager.GetPlugin(logType, "default")
+		assert.ErrorIs(t, err, ErrPluginNotFound)
+	})
+
+	t.Run("SetupRollbackOnFailure", func(t *testing.T) {
+		manager := NewManager()
+		okFactory := &MockFactory{PluginType: logType, ImplName: "oklogger"}
+		failFactory := &MockFactory{PluginType: logType, ImplName: "faillogger", SetupErr: errors.New("setup failed")}
+		manager.RegisterFactory(okFactory)
+		manager.RegisterFactory(failFactory)
+
+		// 直接调用内部函数，避免 map 迭代顺序导致测试不稳定。
+		manager.mu.Lock()
+		factories := manager.factories[logType]
+		ins, err := manager.setupSinglePlugin(logType, "oklogger", RawConfig{"tag": "default"}, factories)
+		assert.NoError(t, err)
+		_, err = manager.setupSinglePlugin(logType, "faillogger", RawConfig{"tag": "failed"}, factories)
+		assert.ErrorIs(t, err, ErrFactorySetup)
+		targets := manager.rollbackPlugins([]initializedPlugin{ins})
+		manager.mu.Unlock()
+
+		err = destroyPlugins(targets)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, okFactory.DestroyCount)
+
+		_, err = manager.GetPlugin(logType, "default")
+		assert.ErrorIs(t, err, ErrPluginNotFound)
 	})
 }
