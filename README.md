@@ -1,2 +1,2 @@
 # strix
-Real-time Multiplayer, Reimagined in Go
+高性能游戏服务器
