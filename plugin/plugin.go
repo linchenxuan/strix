@@ -20,7 +20,7 @@ type Factory interface {
 	Type() Type
 	// Name 返回插件实现名称。
 	Name() string
-	// ConfigType 返回配置结构体指针，Manager 会使用 mapstructure 填充该结构体。
+	// ConfigType 返回配置结构体指针，插件管理器会使用 mapstructure 填充该结构体。
 	ConfigType() any
 	// Setup 根据配置初始化插件实例。
 	// config 的实际类型与 ConfigType 返回的结构体类型一致。

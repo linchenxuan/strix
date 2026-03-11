@@ -31,9 +31,9 @@
 
 - `FactoryName() string`：返回创建该实例的工厂名
 
-## Manager 能力
+## 包级能力
 
-`Manager` 提供以下能力：
+`plugin` 包通过全局单例提供以下能力：
 
 - `RegisterFactory(f Factory)`：注册工厂
 - `SetupPlugins(pluginConf Config) error`：按配置初始化插件
@@ -43,7 +43,7 @@
 
 说明：
 
-- `Manager` 内部使用读写锁，支持并发读取
+- 全局插件管理器内部使用读写锁，支持并发读取
 - 同一插件类型下，实例键不能重复，否则返回 `ErrDuplicatePlugin`
 - `SetupPlugins` 在初始化过程中若失败，会回滚并销毁本次已成功创建的实例
 
@@ -87,24 +87,22 @@ pluginConf := plugin.Config{
 ## 初始化流程
 
 ```go
-mgr := plugin.NewManager()
-
 const metricsType plugin.Type = "metrics"
 
-mgr.RegisterFactory(metricsPrometheusFactory)
-mgr.RegisterFactory(tracerJaegerFactory)
+plugin.RegisterFactory(metricsPrometheusFactory)
+plugin.RegisterFactory(tracerJaegerFactory)
 
-if err := mgr.SetupPlugins(pluginConf); err != nil {
+if err := plugin.SetupPlugins(pluginConf); err != nil {
 	// 处理初始化失败
 }
 
-ins, err := mgr.GetDefaultPlugin(metricsType)
+ins, err := plugin.GetDefaultPlugin(metricsType)
 if err != nil {
 	// 处理获取失败
 }
 _ = ins
 
-if err := mgr.Destroy(); err != nil {
+if err := plugin.Destroy(); err != nil {
 	// 处理销毁失败
 }
 ```

@@ -37,8 +37,8 @@ type initializedPlugin struct {
 	plugin      Plugin
 }
 
-// Manager 负责管理插件工厂与插件实例。
-type Manager struct {
+// manager 负责管理插件工厂与插件实例。
+type manager struct {
 	// factories: 插件类型 -> 工厂名 -> 工厂实现。
 	factories map[Type]map[string]Factory
 	// plugins: 插件类型 -> 实例键（name/tag）-> 插件实例。
@@ -47,16 +47,47 @@ type Manager struct {
 	mu sync.RWMutex
 }
 
-// NewManager 创建并返回一个新的 Manager。
-func NewManager() *Manager {
-	return &Manager{
+var defaultManager = newManager()
+
+// newManager 创建并返回一个新的 manager。
+func newManager() *manager {
+	return &manager{
 		factories: make(map[Type]map[string]Factory),
 		plugins:   make(map[Type]map[string]Plugin),
 	}
 }
 
+// RegisterFactory 在默认全局管理器上注册插件工厂。
+func RegisterFactory(factory Factory) {
+	defaultManager.RegisterFactory(factory)
+}
+
+// SetupPlugins 在默认全局管理器上根据配置初始化所有插件。
+func SetupPlugins(pluginConf Config) error {
+	return defaultManager.SetupPlugins(pluginConf)
+}
+
+// GetPlugin 从默认全局管理器中获取插件实例。
+func GetPlugin(pluginType Type, instanceName string) (Plugin, error) {
+	return defaultManager.GetPlugin(pluginType, instanceName)
+}
+
+// GetDefaultPlugin 从默认全局管理器中获取默认插件实例。
+func GetDefaultPlugin(pluginType Type) (Plugin, error) {
+	return defaultManager.GetDefaultPlugin(pluginType)
+}
+
+// Destroy 销毁默认全局管理器中的所有插件实例。
+func Destroy() error {
+	return defaultManager.Destroy()
+}
+
+func resetManagerForTest() {
+	defaultManager = newManager()
+}
+
 // RegisterFactory 注册插件工厂。
-func (m *Manager) RegisterFactory(factory Factory) {
+func (m *manager) RegisterFactory(factory Factory) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -68,9 +99,7 @@ func (m *Manager) RegisterFactory(factory Factory) {
 	factories[factory.Name()] = factory
 }
 
-// SetupPlugins 根据配置初始化所有插件。
-// pluginConf 对应配置文件中的 [plugin] 节点。
-func (m *Manager) SetupPlugins(pluginConf Config) error {
+func (m *manager) SetupPlugins(pluginConf Config) error {
 	m.mu.Lock()
 	initialized := make([]initializedPlugin, 0)
 
@@ -96,7 +125,7 @@ func (m *Manager) SetupPlugins(pluginConf Config) error {
 }
 
 // setupPluginsByType 初始化某一插件类型下的所有插件实例。
-func (m *Manager) setupPluginsByType(pluginType Type, factoryConfigs TypeConfig, factories map[string]Factory) ([]initializedPlugin, error) {
+func (m *manager) setupPluginsByType(pluginType Type, factoryConfigs TypeConfig, factories map[string]Factory) ([]initializedPlugin, error) {
 	added := make([]initializedPlugin, 0, len(factoryConfigs))
 	for factoryName, factoryConfig := range factoryConfigs {
 		ins, err := m.setupSinglePlugin(pluginType, factoryName, factoryConfig, factories)
@@ -110,7 +139,7 @@ func (m *Manager) setupPluginsByType(pluginType Type, factoryConfigs TypeConfig,
 }
 
 // setupSinglePlugin 初始化并注册一个插件实例。
-func (m *Manager) setupSinglePlugin(pluginType Type, factoryName string, factoryConfig RawConfig, factories map[string]Factory) (initializedPlugin, error) {
+func (m *manager) setupSinglePlugin(pluginType Type, factoryName string, factoryConfig RawConfig, factories map[string]Factory) (initializedPlugin, error) {
 	factory, ok := factories[factoryName]
 	if !ok {
 		return initializedPlugin{}, fmt.Errorf("%w: plugin factory not found for type '%s' and name '%s'", ErrPluginNotFound, pluginType, factoryName)
@@ -176,7 +205,7 @@ func buildInstanceKey(factoryName string, factoryConfig RawConfig) string {
 }
 
 // registerPlugin 将实例写入插件注册表，并检查键冲突。
-func (m *Manager) registerPlugin(pluginType Type, instanceKey string, pluginInstance Plugin) error {
+func (m *manager) registerPlugin(pluginType Type, instanceKey string, pluginInstance Plugin) error {
 	if _, ok := m.plugins[pluginType]; !ok {
 		m.plugins[pluginType] = make(map[string]Plugin)
 	}
@@ -190,7 +219,7 @@ func (m *Manager) registerPlugin(pluginType Type, instanceKey string, pluginInst
 
 // GetPlugin 获取已初始化的插件实例。
 // instanceName 可以是插件名，也可以是 tag。
-func (m *Manager) GetPlugin(pluginType Type, instanceName string) (Plugin, error) {
+func (m *manager) GetPlugin(pluginType Type, instanceName string) (Plugin, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -207,12 +236,12 @@ func (m *Manager) GetPlugin(pluginType Type, instanceName string) (Plugin, error
 }
 
 // GetDefaultPlugin 获取指定类型的默认插件实例。
-func (m *Manager) GetDefaultPlugin(pluginType Type) (Plugin, error) {
+func (m *manager) GetDefaultPlugin(pluginType Type) (Plugin, error) {
 	return m.GetPlugin(pluginType, DefaultInstanceName)
 }
 
 // Destroy 销毁并清空当前已初始化的所有插件实例。
-func (m *Manager) Destroy() error {
+func (m *manager) Destroy() error {
 	m.mu.Lock()
 	destroyTargets, collectErr := m.collectDestroyTargets()
 	m.plugins = make(map[Type]map[string]Plugin)
@@ -230,7 +259,7 @@ func (m *Manager) Destroy() error {
 
 // rollbackPlugins 回滚本次 SetupPlugins 已创建的实例。
 // 调用方必须持有 m.mu 写锁。
-func (m *Manager) rollbackPlugins(initialized []initializedPlugin) []initializedPlugin {
+func (m *manager) rollbackPlugins(initialized []initializedPlugin) []initializedPlugin {
 	targets := make([]initializedPlugin, 0, len(initialized))
 	for i := len(initialized) - 1; i >= 0; i-- {
 		ins := initialized[i]
@@ -247,7 +276,7 @@ func (m *Manager) rollbackPlugins(initialized []initializedPlugin) []initialized
 
 // collectDestroyTargets 收集销毁目标并校验对应工厂是否存在。
 // 调用方必须持有 m.mu 写锁。
-func (m *Manager) collectDestroyTargets() ([]initializedPlugin, error) {
+func (m *manager) collectDestroyTargets() ([]initializedPlugin, error) {
 	targets := make([]initializedPlugin, 0)
 	var errs []error
 
