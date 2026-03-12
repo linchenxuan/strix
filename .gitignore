@@ -33,3 +33,5 @@ go.work.sum
 
 # Local git worktrees
 .worktrees/
+
+*.log
